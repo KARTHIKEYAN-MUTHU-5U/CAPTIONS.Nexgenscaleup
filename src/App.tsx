@@ -493,6 +493,71 @@ export default function App() {
     }
   };
 
+  // Helper: Convert ArrayBuffer to base64 string (chunked to avoid call stack overflow)
+  const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
+    const bytes = new Uint8Array(buffer);
+    const chunkSize = 8192;
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize);
+      binary += String.fromCharCode(...chunk);
+    }
+    return btoa(binary);
+  };
+
+  // Helper: Encode AudioBuffer as WAV blob for transcription
+  const audioBufferToWavBlob = (audioBuffer: AudioBuffer): Blob => {
+    const numChannels = 1; // Mono for transcription
+    const sampleRate = Math.min(audioBuffer.sampleRate, 16000); // 16kHz max for speech recognition
+    const channelData = audioBuffer.getChannelData(0);
+    
+    // Downsample if needed
+    const ratio = audioBuffer.sampleRate / sampleRate;
+    const newLength = Math.ceil(channelData.length / ratio);
+    const downsampled = new Float32Array(newLength);
+    for (let i = 0; i < newLength; i++) {
+      downsampled[i] = channelData[Math.floor(i * ratio)] || 0;
+    }
+    
+    // Convert float32 to int16
+    const int16 = new Int16Array(downsampled.length);
+    for (let i = 0; i < downsampled.length; i++) {
+      const s = Math.max(-1, Math.min(1, downsampled[i]));
+      int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+    
+    // WAV header
+    const dataSize = int16.length * 2;
+    const headerSize = 44;
+    const wavBuffer = new ArrayBuffer(headerSize + dataSize);
+    const view = new DataView(wavBuffer);
+    
+    // RIFF header
+    const writeString = (offset: number, str: string) => {
+      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    };
+    writeString(0, "RIFF");
+    view.setUint32(4, 36 + dataSize, true);
+    writeString(8, "WAVE");
+    writeString(12, "fmt ");
+    view.setUint32(16, 16, true); // chunk size
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * numChannels * 2, true); // byte rate
+    view.setUint16(32, numChannels * 2, true); // block align
+    view.setUint16(34, 16, true); // bits per sample
+    writeString(36, "data");
+    view.setUint32(40, dataSize, true);
+    
+    // Write audio data
+    const wavBytes = new Uint8Array(wavBuffer);
+    const int16Bytes = new Uint8Array(int16.buffer);
+    wavBytes.set(int16Bytes, headerSize);
+    
+    return new Blob([wavBuffer], { type: "audio/wav" });
+  };
+
   // Multi-provider transcription with onset snapping and automatic fallback
   const triggerCaptioningService = async (track: AudioTrackInfo, dataUrl: string, dur: number) => {
     setIsTranscribing(true);
@@ -504,11 +569,40 @@ export default function App() {
     precomputeOnsets(dataUrl);
 
     try {
-      const base64Data = dataUrl.split(",")[1];
+      let base64Data: string;
+      let effectiveMimeType = track.type;
+
+      if (dataUrl.startsWith("blob:")) {
+        // ObjectURL (video files) — fetch binary and convert to base64
+        // This avoids FileReader.readAsDataURL which would load the entire file into memory twice
+        setTranscriptionProgress("Extracting audio for transcription...");
+        const response = await fetch(dataUrl);
+        const arrayBuffer = await response.arrayBuffer();
+
+        // Try to extract and compress audio via AudioContext first (works for MP4/WebM/MOV)
+        try {
+          const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+          audioCtx.close();
+
+          // Encode the decoded audio as WAV for transcription
+          const wavBlob = audioBufferToWavBlob(audioBuffer);
+          effectiveMimeType = "audio/wav";
+          const wavArrayBuf = await wavBlob.arrayBuffer();
+          base64Data = arrayBufferToBase64(wavArrayBuf);
+        } catch {
+          // AudioContext can't decode this format (MKV/AVI/WMV)
+          // Fall back to sending the raw file bytes as base64
+          base64Data = arrayBufferToBase64(arrayBuffer);
+        }
+      } else {
+        // Standard data URL — extract base64 portion after comma
+        base64Data = dataUrl.split(",")[1];
+      }
 
       const result: TranscriptionResult = await transcribe(base64Data, {
         tier: selectedTier,
-        mimeType: track.type,
+        mimeType: effectiveMimeType,
         duration: dur,
         fileName: track.name,
         onProgress: (msg) => setTranscriptionProgress(msg),
