@@ -335,6 +335,8 @@ export default function App() {
     setIsVideoInput(fileIsVideo);
     if (fileIsVideo) {
       setVideoFile(file);
+      // Revoke previous ObjectURL to prevent memory leak on re-upload
+      if (videoUrl) URL.revokeObjectURL(videoUrl);
       const objUrl = URL.createObjectURL(file);
       setVideoUrl(objUrl);
 
@@ -357,6 +359,10 @@ export default function App() {
 
         setAudioTrack(trackInfo);
         triggerCaptioningService(trackInfo, objUrl, fileDuration);
+        
+        // Release temp video element (metadata already extracted)
+        tempVideo.src = "";
+        tempVideo.load();
       });
       tempVideo.addEventListener("error", () => {
         setIsTranscribing(false);
@@ -872,9 +878,11 @@ export default function App() {
     const videoBytes: Blob[] = [];
     let recorder: MediaRecorder;
     try {
+      // Higher bitrate for video exports to preserve text clarity at native resolution
+      const bitrate = isVideoInput ? 12_000_000 : 6_000_000;
       recorder = new MediaRecorder(recordedStream, {
         mimeType: finalMime,
-        videoBitsPerSecond: 6000000, // 6 Mbps high-fidelity text pixel density
+        videoBitsPerSecond: bitrate,
       });
     } catch (e) {
       // Fallback
@@ -921,6 +929,8 @@ export default function App() {
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+      // Revoke download URL after browser starts the download (prevent memory leak)
+      setTimeout(() => URL.revokeObjectURL(dlUrl), 1000);
 
       if (audioCtx) {
         audioCtx.close();
@@ -1035,7 +1045,9 @@ export default function App() {
 
             <div className="space-y-3 bg-zinc-950/60 p-4 rounded-xl border border-zinc-800">
               <div className="flex justify-between items-center text-xs font-mono">
-                <span className="text-zinc-500 font-bold uppercase tracking-wide">Syncing timeline...</span>
+                <span className="text-zinc-500 font-bold uppercase tracking-wide">
+                  {recordingProgress >= 95 && isVideoInput ? 'Converting to MP4...' : 'Syncing timeline...'}
+                </span>
                 <span className="font-extrabold text-amber-400">{recordingProgress}%</span>
               </div>
               <div className="w-full h-2.5 bg-zinc-900 rounded-full overflow-hidden border border-zinc-800 p-0.5">
