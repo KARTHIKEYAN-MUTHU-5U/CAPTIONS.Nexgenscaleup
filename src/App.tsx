@@ -329,11 +329,38 @@ export default function App() {
       setVideoFile(file);
       const objUrl = URL.createObjectURL(file);
       setVideoUrl(objUrl);
-    } else {
-      setVideoFile(null);
-      if (videoUrl) URL.revokeObjectURL(videoUrl);
-      setVideoUrl("");
+
+      // For video files: use ObjectURL (streams from disk, no memory copy)
+      // instead of FileReader.readAsDataURL (would load entire video into RAM as base64)
+      const tempVideo = document.createElement("video");
+      tempVideo.preload = "metadata";
+      tempVideo.src = objUrl;
+      tempVideo.addEventListener("loadedmetadata", () => {
+        const fileDuration = tempVideo.duration;
+        setDuration(fileDuration);
+
+        const trackInfo: AudioTrackInfo = {
+          name: file.name,
+          size: file.size,
+          type: file.type,
+          duration: fileDuration,
+          dataUrl: objUrl, // ObjectURL instead of base64 — efficient for large files
+        };
+
+        setAudioTrack(trackInfo);
+        triggerCaptioningService(trackInfo, objUrl, fileDuration);
+      });
+      tempVideo.addEventListener("error", () => {
+        setIsTranscribing(false);
+        setTranscriptionError("Could not load video. Try a different format.");
+      });
+      return; // Exit early — video path handled
     }
+
+    // Audio-only path (unchanged)
+    if (videoUrl) URL.revokeObjectURL(videoUrl);
+    setVideoFile(null);
+    setVideoUrl("");
 
     const reader = new FileReader();
     reader.readAsDataURL(file);
@@ -580,11 +607,19 @@ export default function App() {
     if (audioRef.current) {
       if (isPlaying) {
         audioRef.current.pause();
+        if (videoPreviewRef.current) videoPreviewRef.current.pause();
         setIsPlaying(false);
       } else {
         // Enforce state synchronization on user action
         audioRef.current.play()
-          .then(() => setIsPlaying(true))
+          .then(() => {
+            setIsPlaying(true);
+            // Sync video preview playback
+            if (videoPreviewRef.current) {
+              videoPreviewRef.current.currentTime = audioRef.current!.currentTime;
+              videoPreviewRef.current.play().catch(() => {});
+            }
+          })
           .catch((err) => console.error("Audio playback play gesture blocked:", err));
       }
     }
@@ -595,6 +630,9 @@ export default function App() {
     setCurrentTime(target);
     if (audioRef.current) {
       audioRef.current.currentTime = target;
+    }
+    if (videoPreviewRef.current) {
+      videoPreviewRef.current.currentTime = target;
     }
   };
 
@@ -647,6 +685,10 @@ export default function App() {
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
+    }
+    if (videoPreviewRef.current) {
+      videoPreviewRef.current.pause();
+      videoPreviewRef.current.currentTime = 0;
     }
 
     // Capture visual frames stream at 90 FPS for ultra-smooth high-refresh rate buttery compilation
@@ -779,6 +821,11 @@ export default function App() {
     recorder.start();
     if (audioRef.current && audioTrack && audioTrack.dataUrl) {
       audioRef.current.play();
+      // Sync video preview playback for recording
+      if (videoPreviewRef.current) {
+        videoPreviewRef.current.currentTime = 0;
+        videoPreviewRef.current.play().catch(() => {});
+      }
     } else {
       // If simulated preview, trigger simulated timeline progress
       setIsPlaying(true);
@@ -802,6 +849,9 @@ export default function App() {
         }
         if (audioRef.current) {
           audioRef.current.pause();
+        }
+        if (videoPreviewRef.current) {
+          videoPreviewRef.current.pause();
         }
         setIsPlaying(false);
       }
@@ -945,10 +995,15 @@ export default function App() {
                     setIsPlaying(false);
                     setWords([]);
                     setAudioTrack(null);
+                    // Reset video state
+                    setIsVideoInput(false);
+                    setVideoFile(null);
+                    if (videoUrl) URL.revokeObjectURL(videoUrl);
+                    setVideoUrl("");
                   }}
                   className="text-[9px] text-rose-400 opacity-60 hover:opacity-100 transition duration-150 uppercase font-extrabold tracking-widest bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/20 cursor-pointer"
                 >
-                  Clear Audio
+                  {isVideoInput ? 'Clear Video' : 'Clear Audio'}
                 </button>
               )}
             </div>
