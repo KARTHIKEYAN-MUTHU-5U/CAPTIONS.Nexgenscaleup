@@ -954,15 +954,15 @@ export default function App() {
       // Revoke download URL after browser starts the download (prevent memory leak)
       setTimeout(() => URL.revokeObjectURL(dlUrl), 1000);
 
-      // Disconnect audio nodes but DON'T close the AudioContext.
-      // Closing it would invalidate the cached MediaElementAudioSourceNode,
-      // causing createMediaElementSource to throw on the next export.
-      if (mediaNode) {
-        try { mediaNode.disconnect(); } catch { /* already disconnected */ }
+      // Only disconnect the RECORDING destination, keep speaker connection alive.
+      // mediaNode.disconnect() without args disconnects ALL outputs — including
+      // audioCtx.destination (speakers), which would permanently silence the 
+      // audio element for all subsequent playback. We must be surgical here.
+      if (mediaNode && audioDest) {
+        try { mediaNode.disconnect(audioDest); } catch { /* already disconnected */ }
       }
-      if (audioCtx && audioCtx.state !== "closed") {
-        audioCtx.suspend();
-      }
+      // Do NOT suspend or close the AudioContext — the audio element's output is
+      // permanently routed through it. If we suspend/close, playback goes silent.
       setIsRecording(false);
       setRecordingProgress(0);
     };
