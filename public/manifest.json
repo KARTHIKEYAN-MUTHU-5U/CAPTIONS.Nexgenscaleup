@@ -1,0 +1,19 @@
+{
+  "name": "Captions Suite — AI Caption Generator",
+  "short_name": "Captions Suite",
+  "description": "AI-powered word-level caption generator with style customization and video export. Free, Fast, and Best transcription tiers.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#18181b",
+  "orientation": "any",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

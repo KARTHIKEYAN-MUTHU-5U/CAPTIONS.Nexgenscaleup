@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback, Suspense, lazy } from "react";
 import { CaptionWord, CaptionStyle, AudioTrackInfo } from "./types";
 import {
   Upload,
@@ -31,9 +31,10 @@ import {
 import { detectOnsets, snapTimestampsToOnsets, estimateAudioQuality } from "./utils/audioAnalysis";
 import { transcribe, type TranscriptionTier, type TranscriptionResult, canRunLocalWhisper } from "./utils/transcriptionEngine";
 
-import CaptionEditor from "./components/CaptionEditor";
-import CaptionStyleControls from "./components/CaptionStyleControls";
-import WaveformVisualizer from "./components/WaveformVisualizer";
+// Lazy-loaded heavy components (code-split for faster initial load)
+const CaptionEditor = lazy(() => import("./components/CaptionEditor"));
+const CaptionStyleControls = lazy(() => import("./components/CaptionStyleControls"));
+const WaveformVisualizer = lazy(() => import("./components/WaveformVisualizer"));
 
 // Initial professional styling presets
 const INITIAL_STYLE: CaptionStyle = {
@@ -1022,12 +1023,14 @@ export default function App() {
             </div>
             {showTranscript ? (
               <div className="p-0 animate-fadeIn flex flex-col flex-1">
-                <CaptionEditor
-                  words={words}
-                  currentTime={currentTime}
-                  onUpdateWords={(w) => setWords(w)}
-                  onSeek={handleSeek}
-                />
+                <Suspense fallback={<div className="p-6 text-center text-zinc-600 text-xs animate-pulse">Loading editor...</div>}>
+                  <CaptionEditor
+                    words={words}
+                    currentTime={currentTime}
+                    onUpdateWords={(w) => setWords(w)}
+                    onSeek={handleSeek}
+                  />
+                </Suspense>
               </div>
             ) : (
               <div className="p-10 text-center text-zinc-500 font-sans text-xs flex flex-col items-center justify-center gap-3 bg-zinc-950/20">
@@ -1046,10 +1049,12 @@ export default function App() {
 
           {/* Sizing & Custom Stylers */}
           <div>
-            <CaptionStyleControls
-              style={captionStyle}
-              onChangeStyle={(s) => setCaptionStyle(s)}
-            />
+            <Suspense fallback={<div className="p-6 text-center text-zinc-600 text-xs animate-pulse">Loading style controls...</div>}>
+              <CaptionStyleControls
+                style={captionStyle}
+                onChangeStyle={(s) => setCaptionStyle(s)}
+              />
+            </Suspense>
           </div>
         </div>
 
@@ -1305,15 +1310,17 @@ export default function App() {
       {/* Global Bottom Waveform Player dock */}
       <footer className="border-t border-zinc-800/80 bg-zinc-950 p-6 shadow-2xl mt-auto relative z-30">
         <div className="max-w-7xl mx-auto w-full">
-          <WaveformVisualizer
-            duration={duration}
-            currentTime={currentTime}
-            isPlaying={isPlaying}
-            onPlayToggle={handlePlayToggle}
-            onSeek={handleSeek}
-            playbackRate={playbackRate}
-            onChangePlaybackRate={(rate) => setPlaybackRate(rate)}
-          />
+          <Suspense fallback={<div className="h-16 bg-zinc-900 rounded-lg animate-pulse" />}>
+            <WaveformVisualizer
+              duration={duration}
+              currentTime={currentTime}
+              isPlaying={isPlaying}
+              onPlayToggle={handlePlayToggle}
+              onSeek={handleSeek}
+              playbackRate={playbackRate}
+              onChangePlaybackRate={(rate) => setPlaybackRate(rate)}
+            />
+          </Suspense>
         </div>
       </footer>
     </div>
