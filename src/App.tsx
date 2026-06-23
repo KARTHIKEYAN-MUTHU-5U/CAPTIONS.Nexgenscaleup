@@ -805,7 +805,7 @@ export default function App() {
   // High-fidelity programmatic WebM video recording with transparency options
   const handleVideoExport = async () => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || isRecording) return; // Guard: prevent double-click launching parallel exports
 
     setIsPlaying(false);
     setIsRecording(true);
@@ -983,7 +983,13 @@ export default function App() {
     // Start
     recorder.start();
     if (audioRef.current && audioTrack && audioTrack.dataUrl) {
-      audioRef.current.play();
+      audioRef.current.play().catch((err) => {
+        console.error("Audio playback blocked during export:", err);
+        // If autoplay is blocked, stop recording gracefully
+        if (recorder.state !== "inactive") recorder.stop();
+        setIsRecording(false);
+        return;
+      });
       // Sync video preview playback for recording
       if (videoPreviewRef.current) {
         videoPreviewRef.current.currentTime = 0;
@@ -1530,13 +1536,14 @@ export default function App() {
             {audioTrack && words.length > 0 && !isRecording && (
               <button
                 onClick={handleVideoExport}
+                disabled={isTranscribing}
                 className={`w-full mt-4 ${isVideoInput 
                   ? 'bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 shadow-emerald-500/20' 
                   : 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 shadow-amber-500/20'
-                } text-black font-sans font-extrabold text-sm uppercase py-3.5 rounded-xl transition duration-200 flex items-center justify-center gap-2 shadow-lg active:scale-[0.98] cursor-pointer`}
+                } text-black font-sans font-extrabold text-sm uppercase py-3.5 rounded-xl transition duration-200 flex items-center justify-center gap-2 shadow-lg active:scale-[0.98] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100`}
               >
                 <Download className="w-5 h-5" />
-                {isVideoInput ? '⬇ Download Captioned Video (MP4)' : '⬇ Download Caption Video (WEBM)'}
+                {isTranscribing ? '⏳ Transcribing...' : isVideoInput ? '⬇ Download Captioned Video (MP4)' : '⬇ Download Caption Video (WEBM)'}
               </button>
             )}
 
@@ -1619,10 +1626,11 @@ export default function App() {
 
               <button
                 onClick={handleVideoExport}
-                className={`w-full ${isVideoInput ? 'bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 shadow-emerald-500/10' : 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 shadow-amber-500/10'} text-black font-sans font-extrabold text-xs uppercase py-4 rounded-xl transition duration-200 flex items-center justify-center gap-1.5 shadow-lg active:scale-[0.98] cursor-pointer`}
+                disabled={isRecording || isTranscribing}
+                className={`w-full ${isVideoInput ? 'bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 shadow-emerald-500/10' : 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 shadow-amber-500/10'} text-black font-sans font-extrabold text-xs uppercase py-4 rounded-xl transition duration-200 flex items-center justify-center gap-1.5 shadow-lg active:scale-[0.98] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed`}
               >
                 <Video className="w-4.5 h-4.5" />
-                {isVideoInput ? '🔥 Export Captioned Video (MP4)' : 'Render Lossless Video Package (WEBM)'}
+                {isRecording ? `🔴 Recording... ${Math.round(recordingProgress)}%` : isTranscribing ? '⏳ Transcribing...' : isVideoInput ? '🔥 Export Captioned Video (MP4)' : 'Render Lossless Video Package (WEBM)'}
               </button>
             </div>
 
