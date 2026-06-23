@@ -18,6 +18,9 @@ import {
   Clock,
   Play,
   HelpCircle,
+  Zap,
+  Cpu,
+  Crown,
 } from "lucide-react";
 import {
   drawCaptionToCanvas,
@@ -25,6 +28,8 @@ import {
   exportToVTT,
   exportToASS,
 } from "./utils/captionRenderer";
+import { detectOnsets, snapTimestampsToOnsets, estimateAudioQuality } from "./utils/audioAnalysis";
+import { transcribe, type TranscriptionTier, type TranscriptionResult, canRunLocalWhisper } from "./utils/transcriptionEngine";
 
 import CaptionEditor from "./components/CaptionEditor";
 import CaptionStyleControls from "./components/CaptionStyleControls";
@@ -86,6 +91,13 @@ export default function App() {
   const [recordingProgress, setRecordingProgress] = useState<number>(0);
   const [isRecordingMic, setIsRecordingMic] = useState<boolean>(false);
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
+
+  // Multi-provider transcription state
+  const [selectedTier, setSelectedTier] = useState<TranscriptionTier>("best");
+  const [transcriptionProgress, setTranscriptionProgress] = useState<string>("");
+  const [transcriptionInfo, setTranscriptionInfo] = useState<{ provider: string; timeMs: number; simulated: boolean } | null>(null);
+  const onsetCacheRef = useRef<number[]>([]);
+  const audioBufferRef = useRef<AudioBuffer | null>(null);
 
   // Playback parameters
   const [currentTime, setCurrentTime] = useState<number>(0);
@@ -378,44 +390,77 @@ export default function App() {
     });
   };
 
-  // Communicate with the backend transcribe endpoint (dual-capability server routes)
+  // Precompute onsets when audio loads (background, non-blocking)
+  const precomputeOnsets = async (dataUrl: string) => {
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const response = await fetch(dataUrl);
+      const arrayBuffer = await response.arrayBuffer();
+      const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+      audioBufferRef.current = audioBuffer;
+      const { onsets } = detectOnsets(audioBuffer);
+      onsetCacheRef.current = onsets;
+      audioCtx.close();
+    } catch (err) {
+      console.warn("Onset precomputation failed (non-critical):", err);
+    }
+  };
+
+  // Multi-provider transcription with onset snapping and automatic fallback
   const triggerCaptioningService = async (track: AudioTrackInfo, dataUrl: string, dur: number) => {
     setIsTranscribing(true);
     setTranscriptionError(null);
+    setTranscriptionProgress("");
+    setTranscriptionInfo(null);
+
+    // Start onset precomputation in parallel
+    precomputeOnsets(dataUrl);
+
     try {
-      // Base64 cleaning for transmission payload
       const base64Data = dataUrl.split(",")[1];
 
-      const res = await fetch("/api/transcribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          audioData: base64Data,
-          mimeType: track.type,
-          duration: dur,
-          fileName: track.name,
-        }),
+      const result: TranscriptionResult = await transcribe(base64Data, {
+        tier: selectedTier,
+        mimeType: track.type,
+        duration: dur,
+        fileName: track.name,
+        onProgress: (msg) => setTranscriptionProgress(msg),
       });
 
-      if (!res.ok) {
-        throw new Error(`Server returned error status: ${res.status}`);
-      }
+      if (result.words.length > 0) {
+        // Align timestamps to actual audio duration
+        let processed = alignWordsToAudioDuration(result.words, dur);
 
-      const responseJSON = await res.json();
-      if (responseJSON.success && Array.isArray(responseJSON.words)) {
-        // Automatically scale and align the timestamps to the precise audio duration to prevent speed mismatches
-        const aligned = alignWordsToAudioDuration(responseJSON.words, dur);
-        setWords(aligned);
+        // Snap to onsets for extra precision (if onsets were precomputed)
+        if (onsetCacheRef.current.length > 0) {
+          processed = snapTimestampsToOnsets(processed, onsetCacheRef.current);
+        }
+
+        setWords(processed);
+        setTranscriptionInfo({
+          provider: result.provider,
+          timeMs: result.processingTimeMs,
+          simulated: result.simulated,
+        });
+
+        if (result.simulated) {
+          setTranscriptionError(`Notice: API unavailable. Showing simulated captions for preview.`);
+        }
       } else {
-        throw new Error("Transcribe response returned incomplete word matrices");
+        // All providers failed, use local fallback
+        const localFallback = generateClientFallbackCaption(dur, track.name);
+        setWords(localFallback);
+        setTranscriptionError(`Notice: All providers unavailable. Using local alignment fallback.`);
       }
-    } catch (err: any) {
-      console.error("Transcription pipeline failed, fallback activated:", err);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error("Transcription pipeline failed:", errMsg);
       const localFallback = generateClientFallbackCaption(dur, track.name);
       setWords(localFallback);
-      setTranscriptionError(`Notice: Gemini is unavailable. We generated a high-fidelity local alignment sequence matching the exact metadata duration.`);
+      setTranscriptionError(`Notice: Transcription failed. Using local alignment fallback.`);
     } finally {
       setIsTranscribing(false);
+      setTranscriptionProgress("");
     }
   };
 
@@ -883,14 +928,68 @@ export default function App() {
               </div>
             )}
 
+            {/* Transcription tier selector */}
+            {!isTranscribing && (
+              <div className="flex items-center gap-2 p-3 rounded-xl bg-zinc-900/60 border border-zinc-800">
+                <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider mr-1">Engine:</span>
+                <button
+                  onClick={() => setSelectedTier("free")}
+                  className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                    selectedTier === "free"
+                      ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40"
+                      : "bg-zinc-800/50 text-zinc-500 border border-zinc-800 hover:text-zinc-300"
+                  }`}
+                >
+                  <Cpu className="w-3 h-3" /> Free
+                </button>
+                <button
+                  onClick={() => setSelectedTier("fast")}
+                  className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                    selectedTier === "fast"
+                      ? "bg-blue-500/20 text-blue-400 border border-blue-500/40"
+                      : "bg-zinc-800/50 text-zinc-500 border border-zinc-800 hover:text-zinc-300"
+                  }`}
+                >
+                  <Zap className="w-3 h-3" /> Fast
+                </button>
+                <button
+                  onClick={() => setSelectedTier("best")}
+                  className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                    selectedTier === "best"
+                      ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
+                      : "bg-zinc-800/50 text-zinc-500 border border-zinc-800 hover:text-zinc-300"
+                  }`}
+                >
+                  <Crown className="w-3 h-3" /> Best
+                </button>
+                <span className="ml-auto text-[8px] font-mono text-zinc-600">
+                  {selectedTier === "free" ? "Whisper · Offline · $0" : selectedTier === "fast" ? "Groq · <1s · $0.0007" : "Gemini · 3-8s · $0.002"}
+                </span>
+              </div>
+            )}
+
             {/* Active loading state */}
             {isTranscribing && (
               <div className="flex items-center gap-3 p-4 rounded-xl bg-amber-500/5 border border-amber-500/20 text-amber-400 animate-pulse text-xs font-sans">
                 <RefreshCw className="w-4.5 h-4.5 animate-spin shrink-0 text-amber-500" />
                 <div className="flex-1">
-                  <span className="font-extrabold text-amber-300 block uppercase tracking-wide">Gemini Cognitive Translation Active</span>
-                  Aligning word tokens perfectly to timeline offsets. This will complete in a few moments.
+                  <span className="font-extrabold text-amber-300 block uppercase tracking-wide">
+                    {selectedTier === "free" ? "Whisper Local Processing" : selectedTier === "fast" ? "Groq Whisper Processing" : "Gemini Flash Processing"}
+                  </span>
+                  {transcriptionProgress || "Aligning word tokens to timeline offsets..."}
                 </div>
+              </div>
+            )}
+
+            {/* Transcription result info */}
+            {transcriptionInfo && !isTranscribing && (
+              <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500/5 border border-emerald-500/20 text-[10px] font-mono text-emerald-400">
+                <span>✓ {transcriptionInfo.provider.toUpperCase()}</span>
+                <span className="text-zinc-600">|</span>
+                <span>{transcriptionInfo.timeMs}ms</span>
+                <span className="text-zinc-600">|</span>
+                <span>{words.length} words</span>
+                {transcriptionInfo.simulated && <span className="text-amber-400">(simulated)</span>}
               </div>
             )}
           </div>

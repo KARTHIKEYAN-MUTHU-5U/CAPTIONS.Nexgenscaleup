@@ -8,9 +8,17 @@
     "api/transcribe.ts": {
       "maxDuration": 60,
       "memory": 1024
+    },
+    "api/transcribe/groq.ts": {
+      "maxDuration": 30,
+      "memory": 512
     }
   },
   "rewrites": [
+    {
+      "source": "/api/transcribe/groq",
+      "destination": "/api/transcribe/groq"
+    },
     {
       "source": "/api/transcribe",
       "destination": "/api/transcribe"
