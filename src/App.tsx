@@ -1169,7 +1169,6 @@ export default function App() {
               >
                 <input
                   type="file"
-                  accept="audio/*,video/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.wma,.mp4,.mkv,.avi,.mov,.webm,.wmv,.mpeg"
                   onChange={handleFileUpload}
                   className="absolute inset-0 opacity-0 cursor-pointer z-20"
                 />
