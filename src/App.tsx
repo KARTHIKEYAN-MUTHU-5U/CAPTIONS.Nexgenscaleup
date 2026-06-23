@@ -1526,9 +1526,32 @@ export default function App() {
                 </div>
               </div>
             </div>
+            {/* Quick Export Button — visible right below the preview */}
+            {audioTrack && words.length > 0 && !isRecording && (
+              <button
+                onClick={handleVideoExport}
+                className={`w-full mt-4 ${isVideoInput 
+                  ? 'bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 shadow-emerald-500/20' 
+                  : 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 shadow-amber-500/20'
+                } text-black font-sans font-extrabold text-sm uppercase py-3.5 rounded-xl transition duration-200 flex items-center justify-center gap-2 shadow-lg active:scale-[0.98] cursor-pointer`}
+              >
+                <Download className="w-5 h-5" />
+                {isVideoInput ? '⬇ Download Captioned Video (MP4)' : '⬇ Download Caption Video (WEBM)'}
+              </button>
+            )}
+
+            {/* Recording progress indicator */}
+            {isRecording && (
+              <div className="w-full mt-4 bg-zinc-900 border border-amber-500/30 rounded-xl p-4 flex items-center justify-center gap-3">
+                <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse" />
+                <span className="text-sm font-bold text-amber-400 uppercase tracking-wider">
+                  Recording... {Math.round(recordingProgress)}%
+                </span>
+              </div>
+            )}
 
             <div className="text-[9px] text-zinc-500 text-center uppercase tracking-widest font-mono font-bold mt-4">
-              HD Portrait Layout: 720 × 1280 Aspect Ratio
+              {isVideoInput ? `Native Resolution Export · ${videoPreviewRef.current?.videoWidth || 720} × ${videoPreviewRef.current?.videoHeight || 1280}` : 'HD Portrait Layout: 720 × 1280 Aspect Ratio'}
             </div>
           </div>
         </div>
