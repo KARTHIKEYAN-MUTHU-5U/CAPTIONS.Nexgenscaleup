@@ -309,6 +309,9 @@ export default function App() {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    // CRITICAL: Reset value so selecting the same file again fires onChange.
+    // Without this, re-selecting the same file after switching tiers does nothing.
+    e.target.value = "";
     processAudioFile(file);
   };
 
@@ -1303,6 +1306,16 @@ export default function App() {
                 <span className="ml-auto text-[8px] font-mono text-zinc-600">
                   {selectedTier === "free" ? "Whisper · Offline · $0" : selectedTier === "fast" ? "Groq · <1s · $0.0007" : "Gemini · 3-8s · $0.002"}
                 </span>
+                {/* Re-transcribe button — visible when a file is loaded and user switches tiers */}
+                {audioTrack && audioTrack.dataUrl && (
+                  <button
+                    onClick={() => triggerCaptioningService(audioTrack, audioTrack.dataUrl, duration)}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-amber-500/20 text-amber-400 border border-amber-500/40 hover:bg-amber-500/30 transition-all cursor-pointer active:scale-95"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    Re-transcribe
+                  </button>
+                )}
               </div>
             )}
 
