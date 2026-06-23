@@ -353,7 +353,13 @@ export default function App() {
       // instead of FileReader.readAsDataURL (would load entire video into RAM as base64)
       const tempVideo = document.createElement("video");
       tempVideo.preload = "metadata";
-      tempVideo.src = objUrl;
+
+      // Named handler so we can remove it before cleanup
+      const onTempVideoError = () => {
+        setIsTranscribing(false);
+        setTranscriptionError("Could not load video. Try a different format.");
+      };
+
       tempVideo.addEventListener("loadedmetadata", () => {
         const fileDuration = tempVideo.duration;
         setDuration(fileDuration);
@@ -369,14 +375,18 @@ export default function App() {
         setAudioTrack(trackInfo);
         triggerCaptioningService(trackInfo, objUrl, fileDuration);
         
+        // Remove error listener BEFORE cleanup — setting src="" and calling load()
+        // fires a spurious "error" event (browser tries to load empty source).
+        // Without this removal, the error handler would set transcriptionError
+        // to "Could not load video" even though the video loaded fine.
+        tempVideo.removeEventListener("error", onTempVideoError);
+
         // Release temp video element (metadata already extracted)
         tempVideo.src = "";
         tempVideo.load();
       });
-      tempVideo.addEventListener("error", () => {
-        setIsTranscribing(false);
-        setTranscriptionError("Could not load video. Try a different format.");
-      });
+      tempVideo.addEventListener("error", onTempVideoError);
+      tempVideo.src = objUrl;
       return; // Exit early — video path handled
     }
 
@@ -649,6 +659,9 @@ export default function App() {
 
         if (result.simulated) {
           setTranscriptionError(`Notice: API unavailable. Showing simulated captions for preview.`);
+        } else {
+          // Clear any stale errors (e.g., from tempVideo cleanup spurious error events)
+          setTranscriptionError(null);
         }
       } else {
         // All providers failed, use local fallback
