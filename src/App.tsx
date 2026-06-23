@@ -855,7 +855,7 @@ export default function App() {
               >
                 <input
                   type="file"
-                  accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac,.wma,.opus,.webm"
+                  accept="audio/*,video/*,.mp3,.wav,.ogg,.m4a,.aac,.flac,.wma,.opus,.webm,.mpeg,.mpg,.mp4,.avi,.mkv,.mov,.3gp,.amr"
                   onChange={handleFileUpload}
                   className="absolute inset-0 opacity-0 cursor-pointer z-20"
                 />
@@ -866,7 +866,7 @@ export default function App() {
                   Browse Audio File
                 </span>
                 <span className="text-[9px] text-zinc-500 mt-1 font-sans">
-                  MP3, WAV OR RECORDED VOICES
+                  MP3, WAV, MPEG, MP4, MKV & MORE
                 </span>
               </div>
 
