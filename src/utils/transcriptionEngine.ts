@@ -159,14 +159,20 @@ async function transcribeWithGemini(
     body: JSON.stringify({ audioData, mimeType, duration, fileName }),
   });
 
-  if (!res.ok) {
-    throw new Error(`Gemini API returned status ${res.status}`);
+  const data = await res.json();
+
+  // Server returns words even on 500 (simulation fallback)
+  if (data.words && Array.isArray(data.words) && data.words.length > 0) {
+    return {
+      words: data.words,
+      simulated: data.simulated ?? data.simulatedFallback ?? !data.success,
+    };
   }
 
-  const data = await res.json();
-  if (data.success && Array.isArray(data.words)) {
-    return { words: data.words, simulated: data.simulated ?? false };
+  if (!res.ok) {
+    throw new Error(`Gemini API returned status ${res.status}: ${data.error || "Unknown error"}`);
   }
+
   throw new Error("Gemini returned invalid response format");
 }
 
