@@ -264,7 +264,7 @@ PlayResY: 1080
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Bangers,${style.textSize * 1.5},${colourToASS(style.textColor)},&H000000FF,${colourToASS(style.outlineColor)},${colourToASS(style.shadowColor)},1,0,0,0,100,100,0,0,1,${style.outlineWidth},${style.shadowBlur},5,10,10,10,1
+Style: Default,Bangers,${style.textSize * 1.5},${colourToASS(style.textColor)},&H000000FF,${colourToASS(style.outlineColor)},${colourToASS(style.shadowColor)},1,0,0,0,100,100,0,0,1,${style.outlineWidth},${style.shadowBlur},2,10,10,40,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

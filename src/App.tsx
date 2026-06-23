@@ -30,6 +30,7 @@ import {
 } from "./utils/captionRenderer";
 import { detectOnsets, snapTimestampsToOnsets, estimateAudioQuality } from "./utils/audioAnalysis";
 import { transcribe, type TranscriptionTier, type TranscriptionResult, canRunLocalWhisper } from "./utils/transcriptionEngine";
+import { saveCaptions, loadCaptions, clearCaptions } from "./utils/captionStorage";
 
 // Lazy-loaded heavy components (code-split for faster initial load)
 const CaptionEditor = lazy(() => import("./components/CaptionEditor"));
@@ -100,6 +101,13 @@ export default function App() {
   const onsetCacheRef = useRef<number[]>([]);
   const audioBufferRef = useRef<AudioBuffer | null>(null);
 
+  // Video input state
+  const [videoFile, setVideoFile] = useState<File | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string>("");
+  const [isVideoInput, setIsVideoInput] = useState<boolean>(false);
+  const [showRecoveryBanner, setShowRecoveryBanner] = useState<boolean>(false);
+  const [recoveryData, setRecoveryData] = useState<{ words: any[]; style: any; fileName: string } | null>(null);
+
   // Playback parameters
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
@@ -116,6 +124,7 @@ export default function App() {
   const requestRef = useRef<number | null>(null);
   const currentTimeRef = useRef<number>(0);
   const lastStateUpdateRef = useRef<number>(0);
+  const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
 
   // Sync state to the high performance canvas reference
   useEffect(() => {
@@ -124,6 +133,13 @@ export default function App() {
 
   // Load preset demo on startup so the app is instantly beautiful and interactable
   useEffect(() => {
+    // Check for crash recovery backup
+    const backup = loadCaptions();
+    if (backup && backup.words.length > 0) {
+      setRecoveryData(backup);
+      setShowRecoveryBanner(true);
+    }
+
     // We bind a synthesizable demo audio file path or create preloaded context
     setWords(PRESET_DEMO_WORDS);
     setDuration(14.0);
@@ -151,9 +167,13 @@ export default function App() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Fixed internal resolution (720x1280 standard portrait high-def subtitle viewport)
-    const targetWidth = 720;
-    const targetHeight = 1280;
+    // Resolution: match video's native resolution during recording, 720x1280 for preview
+    let targetWidth = 720;
+    let targetHeight = 1280;
+    if (isRecording && isVideoInput && videoPreviewRef.current && videoPreviewRef.current.videoWidth) {
+      targetWidth = videoPreviewRef.current.videoWidth;
+      targetHeight = videoPreviewRef.current.videoHeight;
+    }
     if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
       canvas.width = targetWidth;
       canvas.height = targetHeight;
@@ -176,6 +196,19 @@ export default function App() {
           }
         }
 
+        // Draw video frame as canvas background when video is loaded
+        if (isVideoInput && videoPreviewRef.current && videoPreviewRef.current.readyState >= 2) {
+          ctx.drawImage(videoPreviewRef.current, 0, 0, canvas.width, canvas.height);
+        }
+
+        // Sync muted video preview with audio playback
+        if (videoPreviewRef.current && audioRef.current) {
+          const drift = Math.abs(videoPreviewRef.current.currentTime - audioRef.current.currentTime);
+          if (drift > 0.15) {
+            videoPreviewRef.current.currentTime = audioRef.current.currentTime;
+          }
+        }
+
         drawCaptionToCanvas(
           ctx,
           words,
@@ -183,7 +216,7 @@ export default function App() {
           captionStyle,
           targetWidth,
           targetHeight,
-          transparentBg
+          isVideoInput ? true : transparentBg
         );
       };
 
@@ -202,6 +235,19 @@ export default function App() {
           }
         }
 
+        // Draw video frame as canvas background when video is loaded
+        if (isVideoInput && videoPreviewRef.current && videoPreviewRef.current.readyState >= 2) {
+          ctx.drawImage(videoPreviewRef.current, 0, 0, canvas.width, canvas.height);
+        }
+
+        // Sync muted video preview with audio playback
+        if (videoPreviewRef.current && audioRef.current) {
+          const drift = Math.abs(videoPreviewRef.current.currentTime - audioRef.current.currentTime);
+          if (drift > 0.15) {
+            videoPreviewRef.current.currentTime = audioRef.current.currentTime;
+          }
+        }
+
         drawCaptionToCanvas(
           ctx,
           words,
@@ -209,7 +255,7 @@ export default function App() {
           captionStyle,
           targetWidth,
           targetHeight,
-          transparentBg
+          isVideoInput ? true : transparentBg
         );
 
         requestRef.current = requestAnimationFrame(renderLoop);
@@ -226,7 +272,7 @@ export default function App() {
         clearInterval(intervalId);
       }
     };
-  }, [words, captionStyle, transparentBg, isRecording]);
+  }, [words, captionStyle, transparentBg, isRecording, isVideoInput]);
 
   // Simulation timer loop for when preset demo is active (without real audio element playing)
   useEffect(() => {
@@ -264,7 +310,7 @@ export default function App() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const file = e.dataTransfer.files?.[0];
-    if (file && file.type.startsWith("audio/")) {
+    if (file && (file.type.startsWith("audio/") || file.type.startsWith("video/"))) {
       processAudioFile(file);
     }
   };
@@ -275,6 +321,19 @@ export default function App() {
     setTranscriptionError(null);
     setIsPlaying(false);
     setCurrentTime(0);
+
+    // Detect video vs audio input
+    const fileIsVideo = file.type.startsWith("video/");
+    setIsVideoInput(fileIsVideo);
+    if (fileIsVideo) {
+      setVideoFile(file);
+      const objUrl = URL.createObjectURL(file);
+      setVideoUrl(objUrl);
+    } else {
+      setVideoFile(null);
+      if (videoUrl) URL.revokeObjectURL(videoUrl);
+      setVideoUrl("");
+    }
 
     const reader = new FileReader();
     reader.readAsDataURL(file);
@@ -676,15 +735,35 @@ export default function App() {
       }
     };
 
-    recorder.onstop = () => {
+    recorder.onstop = async () => {
       const outcomeBlob = new Blob(videoBytes, { type: finalMime });
-      const dlUrl = URL.createObjectURL(outcomeBlob);
 
+      // Save captions backup before download (crash protection)
+      saveCaptions(words, captionStyle, audioTrack?.name || "video");
+
+      let downloadBlob = outcomeBlob;
+      let downloadExt = "webm";
+      const baseName = audioTrack?.name?.split(".")[0] || "video";
+
+      // For video input, remux WebM→MP4 for social media compatibility
+      if (isVideoInput) {
+        try {
+          setRecordingProgress(95); // Show "Converting..." state
+          const { remuxToMp4 } = await import("./utils/videoExport");
+          downloadBlob = await remuxToMp4(outcomeBlob);
+          downloadExt = "mp4";
+        } catch (err) {
+          console.warn("WebM→MP4 remux failed, downloading as WebM:", err);
+          // Falls back to WebM — still works in most players
+        }
+      }
+
+      const dlUrl = URL.createObjectURL(downloadBlob);
       const a = document.createElement("a");
       a.href = dlUrl;
-      const transLabel = transparentBg ? "_transparent" : "_solid";
-      const formatLabel = includeAudioExport ? "_synced_audio" : "_caption_only";
-      a.download = `rendered_captions${transLabel}${formatLabel}.webm`;
+      a.download = isVideoInput
+        ? `${baseName}_captioned.${downloadExt}`
+        : `rendered_captions_${transparentBg ? "transparent" : "solid"}_${includeAudioExport ? "synced_audio" : "caption_only"}.webm`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -744,6 +823,34 @@ export default function App() {
           onPause={() => setIsPlaying(false)}
           onPlay={() => setIsPlaying(true)}
         />
+      )}
+
+      {/* Crash Recovery Banner */}
+      {showRecoveryBanner && recoveryData && (
+        <div className="fixed top-0 inset-x-0 z-[60] bg-amber-500/95 backdrop-blur-sm text-black py-2.5 px-4 flex items-center justify-center gap-4 shadow-lg animate-fadeIn">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <span className="text-xs font-bold">
+            Recovered {recoveryData.words.length} words from "{recoveryData.fileName}". Restore?
+          </span>
+          <button
+            onClick={() => {
+              setWords(recoveryData.words);
+              setCaptionStyle(recoveryData.style);
+              setDuration(recoveryData.words[recoveryData.words.length - 1]?.end || 10);
+              setShowRecoveryBanner(false);
+              clearCaptions();
+            }}
+            className="px-3 py-1 bg-black text-amber-400 text-[10px] font-bold rounded-lg uppercase tracking-wider hover:bg-zinc-900 transition cursor-pointer"
+          >
+            Restore
+          </button>
+          <button
+            onClick={() => { setShowRecoveryBanner(false); clearCaptions(); }}
+            className="px-3 py-1 bg-black/20 text-black text-[10px] font-bold rounded-lg uppercase tracking-wider hover:bg-black/40 transition cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
       )}
 
       {/* Global Recording Loader Overlay */}
@@ -863,7 +970,7 @@ export default function App() {
                   <Upload className="w-5 h-5 text-zinc-400 group-hover:text-amber-400 transition duration-300" />
                 </div>
                 <span className="text-[11px] font-bold text-zinc-300 font-sans group-hover:text-amber-400 transition uppercase tracking-wider">
-                  Browse Audio File
+                  Browse Audio / Video File
                 </span>
                 <span className="text-[9px] text-zinc-500 mt-1 font-sans">
                   MP3, WAV, MPEG, MP4, MKV & MORE
@@ -1107,7 +1214,7 @@ export default function App() {
               <div className="absolute inset-x-0 top-0 h-1/2 bg-gradient-to-tr from-transparent via-white/[0.015] to-white/[0.04] z-30 pointer-events-none" />
 
               {/* Transparent checkerboard layers */}
-              {transparentBg && (
+              {transparentBg && !isVideoInput && (
                 <div
                   className="absolute inset-0 opacity-[0.035] z-0"
                   style={{
@@ -1116,6 +1223,17 @@ export default function App() {
                     backgroundPosition: "0 0, 10px 10px",
                     backgroundSize: "20px 20px",
                   }}
+                />
+              )}
+
+              {/* Video preview layer (behind canvas, when video is loaded) */}
+              {isVideoInput && videoUrl && (
+                <video
+                  ref={videoPreviewRef}
+                  src={videoUrl}
+                  muted
+                  playsInline
+                  className="absolute inset-0 w-full h-full object-cover z-[1]"
                 />
               )}
 
@@ -1254,10 +1372,10 @@ export default function App() {
 
               <button
                 onClick={handleVideoExport}
-                className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-sans font-extrabold text-xs uppercase py-4 rounded-xl transition duration-200 flex items-center justify-center gap-1.5 shadow-lg shadow-amber-500/10 active:scale-[0.98] cursor-pointer"
+                className={`w-full ${isVideoInput ? 'bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 shadow-emerald-500/10' : 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 shadow-amber-500/10'} text-black font-sans font-extrabold text-xs uppercase py-4 rounded-xl transition duration-200 flex items-center justify-center gap-1.5 shadow-lg active:scale-[0.98] cursor-pointer`}
               >
                 <Video className="w-4.5 h-4.5" />
-                Render Lossless Video Package (WEBM)
+                {isVideoInput ? '🔥 Export Captioned Video (MP4)' : 'Render Lossless Video Package (WEBM)'}
               </button>
             </div>
 
