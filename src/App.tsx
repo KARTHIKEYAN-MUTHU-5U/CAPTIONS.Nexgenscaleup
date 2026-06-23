@@ -196,9 +196,12 @@ export default function App() {
           }
         }
 
+        // Track if video frame was drawn (to skip canvas clear in caption renderer)
+        const videoFrameDrawn = isVideoInput && videoPreviewRef.current && videoPreviewRef.current.readyState >= 2;
+
         // Draw video frame as canvas background when video is loaded
-        if (isVideoInput && videoPreviewRef.current && videoPreviewRef.current.readyState >= 2) {
-          ctx.drawImage(videoPreviewRef.current, 0, 0, canvas.width, canvas.height);
+        if (videoFrameDrawn) {
+          ctx.drawImage(videoPreviewRef.current!, 0, 0, canvas.width, canvas.height);
         }
 
         // Sync muted video preview with audio playback
@@ -216,7 +219,8 @@ export default function App() {
           captionStyle,
           targetWidth,
           targetHeight,
-          isVideoInput ? true : transparentBg
+          isVideoInput ? true : transparentBg,
+          !!videoFrameDrawn
         );
       };
 
@@ -235,9 +239,12 @@ export default function App() {
           }
         }
 
+        // Track if video frame was drawn (to skip canvas clear in caption renderer)
+        const videoFrameDrawn = isVideoInput && videoPreviewRef.current && videoPreviewRef.current.readyState >= 2;
+
         // Draw video frame as canvas background when video is loaded
-        if (isVideoInput && videoPreviewRef.current && videoPreviewRef.current.readyState >= 2) {
-          ctx.drawImage(videoPreviewRef.current, 0, 0, canvas.width, canvas.height);
+        if (videoFrameDrawn) {
+          ctx.drawImage(videoPreviewRef.current!, 0, 0, canvas.width, canvas.height);
         }
 
         // Sync muted video preview with audio playback
@@ -255,7 +262,8 @@ export default function App() {
           captionStyle,
           targetWidth,
           targetHeight,
-          isVideoInput ? true : transparentBg
+          isVideoInput ? true : transparentBg,
+          !!videoFrameDrawn
         );
 
         requestRef.current = requestAnimationFrame(renderLoop);
@@ -785,6 +793,15 @@ export default function App() {
       videoPreviewRef.current.currentTime = 0;
     }
 
+    // IMPORTANT: Resize canvas to video's native resolution BEFORE captureStream.
+    // setIsRecording(true) is an async React update — the useEffect won't resize the
+    // canvas until the next render. captureStream locks to the canvas dimensions at
+    // call time, so we must resize manually here to get full-resolution output.
+    if (isVideoInput && videoPreviewRef.current && videoPreviewRef.current.videoWidth) {
+      canvas.width = videoPreviewRef.current.videoWidth;
+      canvas.height = videoPreviewRef.current.videoHeight;
+    }
+
     // Capture visual frames stream at 90 FPS for ultra-smooth high-refresh rate buttery compilation
     const canvasStream = canvas.captureStream(90);
     const compositeTracks = [...canvasStream.getVideoTracks()];
@@ -832,8 +849,9 @@ export default function App() {
     const recordedStream = new MediaStream(compositeTracks);
 
     // Mime type hierarchy for transparent VP9 WebM codec vs standard H264 bounds
+    // For video input: ALWAYS use H.264 — we remux to MP4, and VP9 in MP4 is non-standard
     let finalMime = "video/webm;codecs=vp9";
-    if (transparentBg) {
+    if (transparentBg && !isVideoInput) {
       if (!MediaRecorder.isTypeSupported(finalMime)) {
         finalMime = "video/webm";
       }

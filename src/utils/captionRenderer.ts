@@ -48,25 +48,28 @@ export function drawCaptionToCanvas(
   style: CaptionStyle,
   width: number,
   height: number,
-  isTransparent: boolean
+  isTransparent: boolean,
+  skipClear: boolean = false
 ) {
-  // Clear canvas
-  if (isTransparent) {
-    ctx.clearRect(0, 0, width, height);
-  } else {
-    // Rich professional visual studio grid background
-    ctx.fillStyle = "#111116"; // Slate dark
-    ctx.fillRect(0, 0, width, height);
+  // Clear canvas (skip when video frame is already drawn as background)
+  if (!skipClear) {
+    if (isTransparent) {
+      ctx.clearRect(0, 0, width, height);
+    } else {
+      // Rich professional visual studio grid background
+      ctx.fillStyle = "#111116"; // Slate dark
+      ctx.fillRect(0, 0, width, height);
 
-    // Subtle center guide lines to make the captioning suite look absolute professional
-    ctx.strokeStyle = "rgba(63, 63, 70, 0.2)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(width / 2, 0);
-    ctx.lineTo(width / 2, height);
-    ctx.moveTo(0, height / 2);
-    ctx.lineTo(width, height / 2);
-    ctx.stroke();
+      // Subtle center guide lines to make the captioning suite look absolute professional
+      ctx.strokeStyle = "rgba(63, 63, 70, 0.2)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(width / 2, 0);
+      ctx.lineTo(width / 2, height);
+      ctx.moveTo(0, height / 2);
+      ctx.lineTo(width, height / 2);
+      ctx.stroke();
+    }
   }
 
   if (words.length === 0) return;
