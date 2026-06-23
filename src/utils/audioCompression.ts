@@ -9,35 +9,50 @@
  */
 
 /**
- * Compress audio by downsampling to 16kHz mono WAV.
- * 16kHz is optimal for speech recognition (all models accept it).
+ * Compress audio by downsampling to an optimal rate for speech recognition.
+ * Dynamically selects sample rate to keep output under maxOutputMB.
  * Returns base64-encoded WAV string.
  */
 export async function compressAudioForTranscription(
   dataUrl: string,
-  targetSampleRate: number = 16000
+  maxOutputMB: number = 2.5
 ): Promise<{ base64: string; mimeType: string; sizeMB: number }> {
+  // First, decode to get duration for budget calculation
+  const tempCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+  const response = await fetch(dataUrl);
+  const arrayBuffer = await response.arrayBuffer();
+  const audioBuffer = await tempCtx.decodeAudioData(arrayBuffer.slice(0));
+  tempCtx.close();
+
+  const durationSec = audioBuffer.duration;
+
+  // Budget: maxOutputMB in bytes, divided by (duration * 2 bytes per sample)
+  // Gives us the max sample rate we can use
+  const maxBytes = maxOutputMB * 1024 * 1024;
+  const budgetSampleRate = Math.floor(maxBytes / (durationSec * 2));
+
+  // Clamp between 8000 and 16000 Hz (all speech models work fine with 8kHz+)
+  const targetSampleRate = Math.min(16000, Math.max(8000, budgetSampleRate));
+
   const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({
     sampleRate: targetSampleRate,
   });
 
   try {
-    // Fetch the audio data
-    const response = await fetch(dataUrl);
-    const arrayBuffer = await response.arrayBuffer();
-
-    // Decode to AudioBuffer (browser handles any format)
-    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    // Re-decode with fresh buffer (can't reuse decoded buffer)
+    const freshResponse = await fetch(dataUrl);
+    const freshArrayBuffer = await freshResponse.arrayBuffer();
+    const freshAudioBuffer = await audioCtx.decodeAudioData(freshArrayBuffer);
 
     // Resample to target rate + mono
     const offlineCtx = new OfflineAudioContext(
       1, // mono
-      Math.ceil(audioBuffer.duration * targetSampleRate),
+      Math.ceil(freshAudioBuffer.duration * targetSampleRate),
       targetSampleRate
     );
 
     const source = offlineCtx.createBufferSource();
-    source.buffer = audioBuffer;
+    source.buffer = freshAudioBuffer;
     source.connect(offlineCtx.destination);
     source.start(0);
 

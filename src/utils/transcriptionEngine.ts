@@ -242,20 +242,21 @@ export async function transcribe(
   const chain = FALLBACK_CHAINS[tier];
   const startTime = performance.now();
 
-  // Pre-compress audio for server-side providers if too large for Vercel's 4.5MB body limit
+  // Always compress audio for server-side providers to stay within Vercel's 4.5MB body limit
+  // Compression is fast (done client-side) and doesn't affect transcription quality
   let compressedAudioData = audioData;
   let compressedMimeType = mimeType;
-  if (needsCompression(audioData)) {
+  const hasServerProvider = chain.some(p => p === "groq" || p === "gemini");
+  if (hasServerProvider) {
     try {
-      onProgress?.("Compressing audio for upload (large file detected)...");
+      onProgress?.("Compressing audio for upload...");
       const dataUrl = `data:${mimeType};base64,${audioData}`;
       const compressed = await compressAudioForTranscription(dataUrl);
       compressedAudioData = compressed.base64;
       compressedMimeType = compressed.mimeType;
-      onProgress?.(`Compressed: ${compressed.sizeMB}MB (16kHz mono WAV)`);
+      onProgress?.(`Compressed to ${compressed.sizeMB}MB — ready to send`);
     } catch (compErr) {
       console.warn("Audio compression failed, using original:", compErr);
-      // Continue with original — may still work for smaller files or Whisper
     }
   }
 
