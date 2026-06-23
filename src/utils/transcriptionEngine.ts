@@ -9,6 +9,7 @@
  */
 
 import type { CaptionWord } from "../types";
+import { compressAudioForTranscription, needsCompression } from "./audioCompression";
 
 export type TranscriptionTier = "free" | "fast" | "best";
 export type TranscriptionProvider = "whisper-local" | "groq" | "gemini";
@@ -241,6 +242,23 @@ export async function transcribe(
   const chain = FALLBACK_CHAINS[tier];
   const startTime = performance.now();
 
+  // Pre-compress audio for server-side providers if too large for Vercel's 4.5MB body limit
+  let compressedAudioData = audioData;
+  let compressedMimeType = mimeType;
+  if (needsCompression(audioData)) {
+    try {
+      onProgress?.("Compressing audio for upload (large file detected)...");
+      const dataUrl = `data:${mimeType};base64,${audioData}`;
+      const compressed = await compressAudioForTranscription(dataUrl);
+      compressedAudioData = compressed.base64;
+      compressedMimeType = compressed.mimeType;
+      onProgress?.(`Compressed: ${compressed.sizeMB}MB (16kHz mono WAV)`);
+    } catch (compErr) {
+      console.warn("Audio compression failed, using original:", compErr);
+      // Continue with original — may still work for smaller files or Whisper
+    }
+  }
+
   for (const provider of chain) {
     try {
       let words: CaptionWord[] = [];
@@ -249,19 +267,20 @@ export async function transcribe(
       switch (provider) {
         case "whisper-local": {
           onProgress?.("Loading Whisper model (first time may take 30-60s)...");
+          // Whisper local uses original audio (no need for compression)
           words = await transcribeWithWhisperLocal(audioData, mimeType, duration);
           onProgress?.("Whisper transcription complete");
           break;
         }
         case "groq": {
           onProgress?.("Sending to Groq Whisper Large V3...");
-          words = await transcribeWithGroq(audioData, mimeType, duration, fileName);
+          words = await transcribeWithGroq(compressedAudioData, compressedMimeType, duration, fileName);
           onProgress?.("Groq transcription complete");
           break;
         }
         case "gemini": {
           onProgress?.("Sending to Gemini 2.5 Flash...");
-          const geminiResult = await transcribeWithGemini(audioData, mimeType, duration, fileName);
+          const geminiResult = await transcribeWithGemini(compressedAudioData, compressedMimeType, duration, fileName);
           words = geminiResult.words;
           simulated = geminiResult.simulated;
           onProgress?.("Gemini transcription complete");
