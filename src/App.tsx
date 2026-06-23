@@ -125,6 +125,8 @@ export default function App() {
   const currentTimeRef = useRef<number>(0);
   const lastStateUpdateRef = useRef<number>(0);
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
+  const audioSourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const exportAudioCtxRef = useRef<AudioContext | null>(null);
 
   // Sync state to the high performance canvas reference
   useEffect(() => {
@@ -329,6 +331,13 @@ export default function App() {
     setTranscriptionError(null);
     setIsPlaying(false);
     setCurrentTime(0);
+
+    // New file = new <audio> element = old MediaElementAudioSourceNode is invalid
+    audioSourceNodeRef.current = null;
+    if (exportAudioCtxRef.current && exportAudioCtxRef.current.state !== "closed") {
+      exportAudioCtxRef.current.close();
+      exportAudioCtxRef.current = null;
+    }
 
     // Detect video vs audio input
     const fileIsVideo = file.type.startsWith("video/");
@@ -777,6 +786,7 @@ export default function App() {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   // High-fidelity programmatic WebM video recording with transparency options
@@ -819,12 +829,24 @@ export default function App() {
     // Inject vocal stream if configured
     if (includeAudioExport && audioTrack && audioTrack.dataUrl && audioRef.current) {
       try {
-        audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        // Reuse the same AudioContext across exports. createMediaElementSource
+        // can only be called once per audio element, and the node is bound to
+        // the context that created it.
+        if (!exportAudioCtxRef.current || exportAudioCtxRef.current.state === "closed") {
+          exportAudioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+          audioSourceNodeRef.current = null; // Force re-creation with new context
+        }
+        audioCtx = exportAudioCtxRef.current;
         if (audioCtx.state === "suspended") {
           await audioCtx.resume();
         }
 
-        mediaNode = audioCtx.createMediaElementSource(audioRef.current);
+        // createMediaElementSource can only be called ONCE per audio element.
+        // On second export, we must reuse the cached node.
+        if (!audioSourceNodeRef.current) {
+          audioSourceNodeRef.current = audioCtx.createMediaElementSource(audioRef.current);
+        }
+        mediaNode = audioSourceNodeRef.current;
         audioDest = audioCtx.createMediaStreamDestination();
 
         // Connect media node to both destination file recorders and speakers
@@ -932,8 +954,14 @@ export default function App() {
       // Revoke download URL after browser starts the download (prevent memory leak)
       setTimeout(() => URL.revokeObjectURL(dlUrl), 1000);
 
-      if (audioCtx) {
-        audioCtx.close();
+      // Disconnect audio nodes but DON'T close the AudioContext.
+      // Closing it would invalidate the cached MediaElementAudioSourceNode,
+      // causing createMediaElementSource to throw on the next export.
+      if (mediaNode) {
+        try { mediaNode.disconnect(); } catch { /* already disconnected */ }
+      }
+      if (audioCtx && audioCtx.state !== "closed") {
+        audioCtx.suspend();
       }
       setIsRecording(false);
       setRecordingProgress(0);
@@ -1194,6 +1222,11 @@ export default function App() {
                         dataUrl: "",
                       });
                       setCurrentTime(0);
+                      // Reset video state so demo doesn't inherit video mode
+                      setIsVideoInput(false);
+                      setVideoFile(null);
+                      if (videoUrl) URL.revokeObjectURL(videoUrl);
+                      setVideoUrl("");
                     }}
                     className="p-2.5 rounded-lg bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 font-sans font-bold flex items-center justify-center cursor-pointer hover:text-amber-400 active:scale-95 transition"
                     title="Reload Preset Demo Subtitles Mapping"
